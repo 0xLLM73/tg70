@@ -14,7 +14,19 @@
     "start": "pnpm --filter bot start",
     "test": "pnpm -r test",
     "lint": "pnpm -r lint",
-    "clean": "pnpm -r clean && rm -rf node_modules"
+    "clean": "pnpm -r clean && rm -rf node_modules",
+    "role:set": "node scripts/role-management.js set",
+    "role:list": "node scripts/role-management.js list",
+    "role:audit": "node scripts/role-management.js audit",
+    "role:find": "node scripts/role-management.js find",
+    "role:help": "node scripts/role-management.js help",
+    "verify:dev": "pnpm run --filter @cabal-ventures/functions dev",
+    "verify:build": "pnpm run --filter @cabal-ventures/functions build",
+    "verify:start": "pnpm run --filter @cabal-ventures/functions start"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.39.3",
+    "dotenv": "^16.4.1"
   },
   "devDependencies": {
     "@types/node": "^20.11.16",
