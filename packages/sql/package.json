@@ -1,0 +1,15 @@
+{
+  "name": "@cabal-ventures/sql",
+  "version": "0.1.0",
+  "description": "Cabal.Ventures Database Schemas and Migrations",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "echo \"No build needed for SQL files\"",
+    "dev": "echo \"No dev server for SQL files\"",
+    "start": "echo \"No start command for SQL files\"",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "lint": "echo \"No linting for SQL files\"",
+    "clean": "echo \"No cleanup needed for SQL files\""
+  }
+}
