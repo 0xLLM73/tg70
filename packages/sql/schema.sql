@@ -125,3 +125,502 @@ COMMENT ON COLUMN auth_events.ip IS 'IP address of the request';
 COMMENT ON COLUMN auth_events.user_agent IS 'User agent string';
 COMMENT ON COLUMN auth_events.metadata IS 'Additional event metadata as JSON';
 COMMENT ON COLUMN auth_events.created_at IS 'When the event occurred';
+
+-- ====================================
+-- STAGE 2: Communities & Content Management Schema
+-- ====================================
+
+-- Communities table
+CREATE TABLE IF NOT EXISTS communities (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    slug VARCHAR(50) UNIQUE NOT NULL CHECK (slug ~ '^[a-z0-9_-]+$'),
+    name VARCHAR(100) NOT NULL,
+    description TEXT,
+    is_private BOOLEAN DEFAULT FALSE,
+    creator_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    member_count INTEGER DEFAULT 0 CHECK (member_count >= 0),
+    post_count INTEGER DEFAULT 0 CHECK (post_count >= 0),
+    avatar_url TEXT,
+    settings JSONB DEFAULT '{}',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Community members table
+CREATE TABLE IF NOT EXISTS community_members (
+    community_id UUID REFERENCES communities(id) ON DELETE CASCADE,
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    role VARCHAR(20) DEFAULT 'member' CHECK (role IN ('admin', 'moderator', 'member')),
+    status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active', 'pending', 'banned')),
+    joined_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (community_id, user_id)
+);
+
+-- Posts table
+CREATE TABLE IF NOT EXISTS posts (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    community_id UUID REFERENCES communities(id) ON DELETE CASCADE,
+    author_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    title VARCHAR(200),
+    content JSONB NOT NULL, -- {type: 'text'|'image'|'link'|'poll', data: {...}}
+    vote_score INTEGER DEFAULT 0,
+    comment_count INTEGER DEFAULT 0 CHECK (comment_count >= 0),
+    is_pinned BOOLEAN DEFAULT FALSE,
+    is_deleted BOOLEAN DEFAULT FALSE,
+    metadata JSONB DEFAULT '{}',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Comments table
+CREATE TABLE IF NOT EXISTS comments (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    post_id UUID REFERENCES posts(id) ON DELETE CASCADE,
+    parent_id UUID REFERENCES comments(id) ON DELETE CASCADE,
+    author_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    content TEXT NOT NULL,
+    vote_score INTEGER DEFAULT 0,
+    depth INTEGER DEFAULT 0 CHECK (depth >= 0 AND depth <= 3),
+    is_deleted BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Votes table
+CREATE TABLE IF NOT EXISTS votes (
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    post_id UUID REFERENCES posts(id) ON DELETE CASCADE,
+    comment_id UUID REFERENCES comments(id) ON DELETE CASCADE,
+    vote_type INTEGER CHECK (vote_type IN (-1, 1)), -- -1 down, 1 up
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    CHECK ((post_id IS NULL) != (comment_id IS NULL)), -- XOR constraint
+    UNIQUE(user_id, post_id),
+    UNIQUE(user_id, comment_id)
+);
+
+-- Jobs table
+CREATE TABLE IF NOT EXISTS jobs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    community_id UUID REFERENCES communities(id) ON DELETE CASCADE,
+    poster_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    title VARCHAR(200) NOT NULL,
+    description TEXT,
+    salary_min INTEGER CHECK (salary_min > 0),
+    salary_max INTEGER CHECK (salary_max > 0 AND salary_max >= salary_min),
+    currency VARCHAR(3) DEFAULT 'USD',
+    is_remote BOOLEAN DEFAULT FALSE,
+    location VARCHAR(100),
+    application_count INTEGER DEFAULT 0 CHECK (application_count >= 0),
+    is_active BOOLEAN DEFAULT TRUE,
+    expires_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Job applications table
+CREATE TABLE IF NOT EXISTS job_applications (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    job_id UUID REFERENCES jobs(id) ON DELETE CASCADE,
+    applicant_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    message TEXT,
+    status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'reviewed', 'accepted', 'rejected')),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(job_id, applicant_id)
+);
+
+-- ====================================
+-- INDEXES FOR PERFORMANCE
+-- ====================================
+
+-- Communities indexes
+CREATE INDEX IF NOT EXISTS idx_communities_slug ON communities(slug);
+CREATE INDEX IF NOT EXISTS idx_communities_creator_id ON communities(creator_id);
+CREATE INDEX IF NOT EXISTS idx_communities_created_at ON communities(created_at);
+CREATE INDEX IF NOT EXISTS idx_communities_member_count ON communities(member_count DESC);
+
+-- Community members indexes
+CREATE INDEX IF NOT EXISTS idx_community_members_community_id ON community_members(community_id);
+CREATE INDEX IF NOT EXISTS idx_community_members_user_id ON community_members(user_id);
+CREATE INDEX IF NOT EXISTS idx_community_members_status ON community_members(status);
+
+-- Posts indexes
+CREATE INDEX IF NOT EXISTS idx_posts_community_id ON posts(community_id);
+CREATE INDEX IF NOT EXISTS idx_posts_author_id ON posts(author_id);
+CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_posts_vote_score ON posts(vote_score DESC);
+CREATE INDEX IF NOT EXISTS idx_posts_is_pinned ON posts(is_pinned, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_posts_content_gin ON posts USING GIN (content);
+
+-- Comments indexes
+CREATE INDEX IF NOT EXISTS idx_comments_post_id ON comments(post_id);
+CREATE INDEX IF NOT EXISTS idx_comments_parent_id ON comments(parent_id);
+CREATE INDEX IF NOT EXISTS idx_comments_author_id ON comments(author_id);
+CREATE INDEX IF NOT EXISTS idx_comments_created_at ON comments(created_at);
+
+-- Votes indexes
+CREATE INDEX IF NOT EXISTS idx_votes_post_id ON votes(post_id);
+CREATE INDEX IF NOT EXISTS idx_votes_comment_id ON votes(comment_id);
+CREATE INDEX IF NOT EXISTS idx_votes_user_id ON votes(user_id);
+
+-- Jobs indexes
+CREATE INDEX IF NOT EXISTS idx_jobs_community_id ON jobs(community_id);
+CREATE INDEX IF NOT EXISTS idx_jobs_poster_id ON jobs(poster_id);
+CREATE INDEX IF NOT EXISTS idx_jobs_is_remote ON jobs(is_remote);
+CREATE INDEX IF NOT EXISTS idx_jobs_is_active ON jobs(is_active, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_jobs_salary ON jobs(salary_min, salary_max);
+
+-- Job applications indexes
+CREATE INDEX IF NOT EXISTS idx_job_applications_job_id ON job_applications(job_id);
+CREATE INDEX IF NOT EXISTS idx_job_applications_applicant_id ON job_applications(applicant_id);
+
+-- Full-text search indexes
+CREATE INDEX IF NOT EXISTS idx_communities_search ON communities USING GIN (to_tsvector('english', name || ' ' || COALESCE(description, '')));
+CREATE INDEX IF NOT EXISTS idx_posts_search ON posts USING GIN (to_tsvector('english', COALESCE(title, '') || ' ' || (content->>'data')));
+CREATE INDEX IF NOT EXISTS idx_jobs_search ON jobs USING GIN (to_tsvector('english', title || ' ' || COALESCE(description, '')));
+
+-- ====================================
+-- TRIGGERS FOR AUTOMATIC UPDATES
+-- ====================================
+
+-- Update trigger for updated_at columns
+CREATE TRIGGER update_communities_updated_at
+    BEFORE UPDATE ON communities
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_community_members_updated_at
+    BEFORE UPDATE ON community_members
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_posts_updated_at
+    BEFORE UPDATE ON posts
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_comments_updated_at
+    BEFORE UPDATE ON comments
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_votes_updated_at
+    BEFORE UPDATE ON votes
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_jobs_updated_at
+    BEFORE UPDATE ON jobs
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_job_applications_updated_at
+    BEFORE UPDATE ON job_applications
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+-- Vote score maintenance triggers
+CREATE OR REPLACE FUNCTION update_post_score() RETURNS TRIGGER AS $$
+BEGIN
+    UPDATE posts SET vote_score = (
+        SELECT COALESCE(SUM(vote_type), 0) FROM votes WHERE post_id = COALESCE(NEW.post_id, OLD.post_id) AND post_id IS NOT NULL
+    ) WHERE id = COALESCE(NEW.post_id, OLD.post_id);
+    RETURN COALESCE(NEW, OLD);
+END; $$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION update_comment_score() RETURNS TRIGGER AS $$
+BEGIN
+    UPDATE comments SET vote_score = (
+        SELECT COALESCE(SUM(vote_type), 0) FROM votes WHERE comment_id = COALESCE(NEW.comment_id, OLD.comment_id) AND comment_id IS NOT NULL
+    ) WHERE id = COALESCE(NEW.comment_id, OLD.comment_id);
+    RETURN COALESCE(NEW, OLD);
+END; $$ LANGUAGE plpgsql;
+
+-- Create vote score triggers
+CREATE TRIGGER votes_post_score_trg
+    AFTER INSERT OR DELETE OR UPDATE OF vote_type ON votes
+    FOR EACH ROW 
+    WHEN (NEW.post_id IS NOT NULL OR OLD.post_id IS NOT NULL)
+    EXECUTE FUNCTION update_post_score();
+
+CREATE TRIGGER votes_comment_score_trg
+    AFTER INSERT OR DELETE OR UPDATE OF vote_type ON votes
+    FOR EACH ROW 
+    WHEN (NEW.comment_id IS NOT NULL OR OLD.comment_id IS NOT NULL)
+    EXECUTE FUNCTION update_comment_score();
+
+-- Community member count trigger
+CREATE OR REPLACE FUNCTION update_community_member_count() RETURNS TRIGGER AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        UPDATE communities SET member_count = member_count + 1 WHERE id = NEW.community_id;
+        RETURN NEW;
+    ELSIF TG_OP = 'DELETE' THEN
+        UPDATE communities SET member_count = member_count - 1 WHERE id = OLD.community_id;
+        RETURN OLD;
+    ELSIF TG_OP = 'UPDATE' THEN
+        -- Handle status changes (active <-> pending/banned)
+        IF OLD.status = 'active' AND NEW.status != 'active' THEN
+            UPDATE communities SET member_count = member_count - 1 WHERE id = NEW.community_id;
+        ELSIF OLD.status != 'active' AND NEW.status = 'active' THEN
+            UPDATE communities SET member_count = member_count + 1 WHERE id = NEW.community_id;
+        END IF;
+        RETURN NEW;
+    END IF;
+    RETURN NULL;
+END; $$ LANGUAGE plpgsql;
+
+CREATE TRIGGER community_member_count_trg
+    AFTER INSERT OR DELETE OR UPDATE OF status ON community_members
+    FOR EACH ROW
+    EXECUTE FUNCTION update_community_member_count();
+
+-- Post comment count trigger
+CREATE OR REPLACE FUNCTION update_post_comment_count() RETURNS TRIGGER AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        UPDATE posts SET comment_count = comment_count + 1 WHERE id = NEW.post_id;
+        RETURN NEW;
+    ELSIF TG_OP = 'DELETE' THEN
+        UPDATE posts SET comment_count = comment_count - 1 WHERE id = OLD.post_id;
+        RETURN OLD;
+    END IF;
+    RETURN NULL;
+END; $$ LANGUAGE plpgsql;
+
+CREATE TRIGGER post_comment_count_trg
+    AFTER INSERT OR DELETE ON comments
+    FOR EACH ROW
+    EXECUTE FUNCTION update_post_comment_count();
+
+-- Job application count trigger
+CREATE OR REPLACE FUNCTION update_job_application_count() RETURNS TRIGGER AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        UPDATE jobs SET application_count = application_count + 1 WHERE id = NEW.job_id;
+        RETURN NEW;
+    ELSIF TG_OP = 'DELETE' THEN
+        UPDATE jobs SET application_count = application_count - 1 WHERE id = OLD.job_id;
+        RETURN OLD;
+    END IF;
+    RETURN NULL;
+END; $$ LANGUAGE plpgsql;
+
+CREATE TRIGGER job_application_count_trg
+    AFTER INSERT OR DELETE ON job_applications
+    FOR EACH ROW
+    EXECUTE FUNCTION update_job_application_count();
+
+-- ====================================
+-- ROW LEVEL SECURITY POLICIES
+-- ====================================
+
+-- Enable RLS on all new tables
+ALTER TABLE communities ENABLE ROW LEVEL SECURITY;
+ALTER TABLE community_members ENABLE ROW LEVEL SECURITY;
+ALTER TABLE posts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE comments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE votes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE jobs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE job_applications ENABLE ROW LEVEL SECURITY;
+
+-- Communities policies
+CREATE POLICY "Public communities visible to all" ON communities
+    FOR SELECT USING (NOT is_private);
+
+CREATE POLICY "Private communities visible to members" ON communities
+    FOR SELECT USING (
+        is_private AND id IN (
+            SELECT community_id FROM community_members 
+            WHERE user_id = auth.uid() AND status = 'active'
+        )
+    );
+
+CREATE POLICY "Community creators and admins can update" ON communities
+    FOR UPDATE USING (
+        creator_id = auth.uid() OR
+        EXISTS (SELECT 1 FROM users WHERE id = auth.uid() AND role = 'siteAdmin') OR
+        EXISTS (SELECT 1 FROM community_members WHERE community_id = communities.id AND user_id = auth.uid() AND role = 'admin')
+    );
+
+CREATE POLICY "Authenticated users can create communities" ON communities
+    FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+
+-- Community members policies
+CREATE POLICY "Members can view community membership" ON community_members
+    FOR SELECT USING (
+        community_id IN (
+            SELECT id FROM communities WHERE NOT is_private
+        ) OR
+        community_id IN (
+            SELECT community_id FROM community_members 
+            WHERE user_id = auth.uid() AND status = 'active'
+        )
+    );
+
+CREATE POLICY "Users can join communities" ON community_members
+    FOR INSERT WITH CHECK (user_id = auth.uid());
+
+CREATE POLICY "Users can update own membership" ON community_members
+    FOR UPDATE USING (user_id = auth.uid());
+
+-- Posts policies
+CREATE POLICY "Members can view posts of joined communities" ON posts
+    FOR SELECT USING (
+        NOT is_deleted AND community_id IN (
+            SELECT community_id FROM community_members 
+            WHERE user_id = auth.uid() AND status = 'active'
+        )
+    );
+
+CREATE POLICY "Community members can create posts" ON posts
+    FOR INSERT WITH CHECK (
+        auth.uid() IS NOT NULL AND community_id IN (
+            SELECT community_id FROM community_members 
+            WHERE user_id = auth.uid() AND status = 'active'
+        )
+    );
+
+CREATE POLICY "Authors can update own posts" ON posts
+    FOR UPDATE USING (author_id = auth.uid());
+
+-- Comments policies
+CREATE POLICY "Members can view comments" ON comments
+    FOR SELECT USING (
+        NOT is_deleted AND post_id IN (
+            SELECT id FROM posts WHERE community_id IN (
+                SELECT community_id FROM community_members 
+                WHERE user_id = auth.uid() AND status = 'active'
+            )
+        )
+    );
+
+CREATE POLICY "Community members can create comments" ON posts
+    FOR INSERT WITH CHECK (
+        auth.uid() IS NOT NULL AND post_id IN (
+            SELECT id FROM posts WHERE community_id IN (
+                SELECT community_id FROM community_members 
+                WHERE user_id = auth.uid() AND status = 'active'
+            )
+        )
+    );
+
+-- Votes policies
+CREATE POLICY "Users can view votes" ON votes
+    FOR SELECT USING (
+        (post_id IS NOT NULL AND post_id IN (
+            SELECT id FROM posts WHERE community_id IN (
+                SELECT community_id FROM community_members 
+                WHERE user_id = auth.uid() AND status = 'active'
+            )
+        )) OR
+        (comment_id IS NOT NULL AND comment_id IN (
+            SELECT id FROM comments WHERE post_id IN (
+                SELECT id FROM posts WHERE community_id IN (
+                    SELECT community_id FROM community_members 
+                    WHERE user_id = auth.uid() AND status = 'active'
+                )
+            )
+        ))
+    );
+
+CREATE POLICY "Users can manage own votes" ON votes
+    FOR ALL USING (user_id = auth.uid());
+
+-- Jobs policies
+CREATE POLICY "Members can view jobs" ON jobs
+    FOR SELECT USING (
+        is_active AND community_id IN (
+            SELECT community_id FROM community_members 
+            WHERE user_id = auth.uid() AND status = 'active'
+        )
+    );
+
+CREATE POLICY "Community members can post jobs" ON jobs
+    FOR INSERT WITH CHECK (
+        auth.uid() IS NOT NULL AND community_id IN (
+            SELECT community_id FROM community_members 
+            WHERE user_id = auth.uid() AND status = 'active'
+        )
+    );
+
+CREATE POLICY "Job posters can update own jobs" ON jobs
+    FOR UPDATE USING (poster_id = auth.uid());
+
+-- Job applications policies
+CREATE POLICY "Job posters and applicants can view applications" ON job_applications
+    FOR SELECT USING (
+        applicant_id = auth.uid() OR
+        job_id IN (SELECT id FROM jobs WHERE poster_id = auth.uid())
+    );
+
+CREATE POLICY "Users can apply to jobs" ON job_applications
+    FOR INSERT WITH CHECK (applicant_id = auth.uid());
+
+CREATE POLICY "Applicants can update own applications" ON job_applications
+    FOR UPDATE USING (applicant_id = auth.uid());
+
+-- Service role bypass policies
+CREATE POLICY "Service Role All Access Communities" ON communities
+    FOR ALL USING (current_setting('role') = 'service_role');
+
+CREATE POLICY "Service Role All Access Community Members" ON community_members
+    FOR ALL USING (current_setting('role') = 'service_role');
+
+CREATE POLICY "Service Role All Access Posts" ON posts
+    FOR ALL USING (current_setting('role') = 'service_role');
+
+CREATE POLICY "Service Role All Access Comments" ON comments
+    FOR ALL USING (current_setting('role') = 'service_role');
+
+CREATE POLICY "Service Role All Access Votes" ON votes
+    FOR ALL USING (current_setting('role') = 'service_role');
+
+CREATE POLICY "Service Role All Access Jobs" ON jobs
+    FOR ALL USING (current_setting('role') = 'service_role');
+
+CREATE POLICY "Service Role All Access Job Applications" ON job_applications
+    FOR ALL USING (current_setting('role') = 'service_role');
+
+-- ====================================
+-- EXTEND AUTH_EVENTS FOR STAGE 2
+-- ====================================
+
+-- Update auth_events event constraint to include new events
+ALTER TABLE auth_events DROP CONSTRAINT IF EXISTS auth_events_event_check;
+ALTER TABLE auth_events ADD CONSTRAINT auth_events_event_check 
+    CHECK (event IN ('login', 'link', 'unlink', 'role_change', 'join_community', 'leave_community', 'create_post', 'create_comment', 'vote', 'moderate', 'create_job', 'apply_job'));
+
+-- ====================================
+-- TABLE COMMENTS FOR DOCUMENTATION
+-- ====================================
+
+COMMENT ON TABLE communities IS 'User-created communities for organizing content';
+COMMENT ON COLUMN communities.slug IS 'URL-friendly unique identifier';
+COMMENT ON COLUMN communities.is_private IS 'Whether community requires approval to join';
+COMMENT ON COLUMN communities.member_count IS 'Cached count of active members';
+COMMENT ON COLUMN communities.post_count IS 'Cached count of posts';
+
+COMMENT ON TABLE community_members IS 'Membership records for users in communities';
+COMMENT ON COLUMN community_members.role IS 'Member role: admin, moderator, or member';
+COMMENT ON COLUMN community_members.status IS 'Membership status: active, pending, or banned';
+
+COMMENT ON TABLE posts IS 'User posts within communities';
+COMMENT ON COLUMN posts.content IS 'JSONB content with type and data fields';
+COMMENT ON COLUMN posts.vote_score IS 'Cached sum of all votes';
+COMMENT ON COLUMN posts.comment_count IS 'Cached count of comments';
+
+COMMENT ON TABLE comments IS 'Threaded comments on posts';
+COMMENT ON COLUMN comments.depth IS 'Nesting level (max 3)';
+COMMENT ON COLUMN comments.vote_score IS 'Cached sum of all votes';
+
+COMMENT ON TABLE votes IS 'User votes on posts and comments';
+COMMENT ON COLUMN votes.vote_type IS '-1 for downvote, 1 for upvote';
+
+COMMENT ON TABLE jobs IS 'Job postings within communities';
+COMMENT ON COLUMN jobs.application_count IS 'Cached count of applications';
+COMMENT ON COLUMN jobs.is_active IS 'Whether job is still accepting applications';
+
+COMMENT ON TABLE job_applications IS 'User applications to job postings';

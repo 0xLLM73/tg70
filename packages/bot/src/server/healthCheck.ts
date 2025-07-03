@@ -56,10 +56,12 @@ healthRouter.get('/healthz', async (req: Request, res: Response) => {
         res.status(503);
       }
 
-      return res.json(detailedResponse);
+      res.json(detailedResponse);
+      return;
     }
 
     res.json(healthResponse);
+    return;
   } catch (error) {
     logger.error('Health check error:', error);
     
