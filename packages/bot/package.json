@@ -11,6 +11,10 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
+    "test:interceptor": "jest --config jest.interceptor.config.js",
+    "test:interceptor:watch": "jest --config jest.interceptor.config.js --watch",
+    "test:demo": "tsx src/__tests__/interceptor/mock-vs-interceptor-demo.ts",
+    "test:all": "npm run test && npm run test:interceptor",
     "lint": "eslint src/**/*.ts",
     "clean": "rm -rf dist"
   },
