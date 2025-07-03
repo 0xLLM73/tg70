@@ -11,6 +11,7 @@ import { testCommand } from './commands/test.js';
 import { linkCommand, handleLinkingFlow } from './commands/link.js';
 import { linkStatusCommand } from './commands/linkStatus.js';
 import { adminPanelCommand } from './commands/adminPanel.js';
+import { createCommunityCommand, handleCommunityCreationFlow } from './commands/createCommunity.js';
 import type { BotContext } from './types/index.js';
 
 /**
@@ -35,6 +36,7 @@ export function createBot(): Telegraf<BotContext> {
   bot.command('link', asyncErrorHandler(linkCommand));
   bot.command('link_status', asyncErrorHandler(linkStatusCommand));
   bot.command('admin_panel', asyncErrorHandler(adminPanelCommand));
+  bot.command('create_community', asyncErrorHandler(createCommunityCommand));
 
   // Handle unknown commands
   bot.on('text', asyncErrorHandler(async (ctx: BotContext) => {
@@ -56,6 +58,12 @@ export function createBot(): Telegraf<BotContext> {
     const handledByLinking = await handleLinkingFlow(ctx);
     if (handledByLinking) {
       return; // Message was handled by linking flow
+    }
+
+    // Check if user is in community creation flow
+    const handledByCommunityCreation = await handleCommunityCreationFlow(ctx);
+    if (handledByCommunityCreation) {
+      return; // Message was handled by community creation flow
     }
 
     // Handle regular text messages

@@ -56,6 +56,15 @@ export interface SessionData {
   linkingEmail?: string; // Email being linked during magic link flow
   linkingToken?: string; // Temporary token for verification
   linkingExpiry?: Date; // When the linking process expires
+  communityCreation?: {
+    step: 1 | 2 | 3 | 4 | 5;
+    data: {
+      slug?: string;
+      name?: string;
+      description?: string;
+      is_private?: boolean;
+    };
+  };
 }
 
 /**
