@@ -12,6 +12,8 @@ import { linkCommand, handleLinkingFlow } from './commands/link.js';
 import { linkStatusCommand } from './commands/linkStatus.js';
 import { adminPanelCommand } from './commands/adminPanel.js';
 import { createCommunityCommand, handleCommunityCreationFlow } from './commands/createCommunity.js';
+import { communitiesCommand, handleCommunitiesCallback, handleCommunitiesSearch } from './commands/communities.js';
+import { joinCommand, parseJoinCommand } from './commands/join.js';
 import type { BotContext } from './types/index.js';
 
 /**
@@ -37,8 +39,27 @@ export function createBot(): Telegraf<BotContext> {
   bot.command('link_status', asyncErrorHandler(linkStatusCommand));
   bot.command('admin_panel', asyncErrorHandler(adminPanelCommand));
   bot.command('create_community', asyncErrorHandler(createCommunityCommand));
+  bot.command('communities', asyncErrorHandler(communitiesCommand));
+  bot.command('join', asyncErrorHandler(async (ctx: BotContext) => {
+    const text = ctx.message && 'text' in ctx.message ? ctx.message.text : '';
+    const slug = parseJoinCommand(text);
+    await joinCommand(ctx, slug);
+  }));
 
-  // Handle unknown commands
+  // Handle callback queries
+  bot.on('callback_query', asyncErrorHandler(async (ctx: BotContext) => {
+    const callbackData = (ctx.callbackQuery as any)?.data;
+    
+    if (callbackData?.startsWith('communities')) {
+      await handleCommunitiesCallback(ctx);
+      return;
+    }
+    
+    // Handle other callbacks...
+    await ctx.answerCbQuery('Unknown action');
+  }));
+
+  // Handle unknown commands and text messages
   bot.on('text', asyncErrorHandler(async (ctx: BotContext) => {
     const text = ctx.message && 'text' in ctx.message ? ctx.message.text : '';
     
@@ -64,6 +85,13 @@ export function createBot(): Telegraf<BotContext> {
     const handledByCommunityCreation = await handleCommunityCreationFlow(ctx);
     if (handledByCommunityCreation) {
       return; // Message was handled by community creation flow
+    }
+    
+    // Check if user is in communities search flow
+    const sessionData = ctx.session as any;
+    if (sessionData?.communitiesWaitingForSearch) {
+      await handleCommunitiesSearch(ctx, text);
+      return; // Message was handled by communities search flow
     }
 
     // Handle regular text messages

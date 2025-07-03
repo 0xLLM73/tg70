@@ -148,7 +148,10 @@ export class CommunityService {
       }
 
       // Check if user has access to private community
-      if (community.is_private && userId) {
+      if (community.is_private) {
+        if (!userId) {
+          return null; // Hide private community from anonymous users
+        }
         const isMember = await this.isMember(community.id, userId);
         if (!isMember) {
           return null; // Hide private community from non-members
@@ -167,6 +170,34 @@ export class CommunityService {
    */
   static async getById(id: string, userId?: string): Promise<Community | null> {
     try {
+      const community = await this.getByIdInternal(id);
+      if (!community) {
+        return null;
+      }
+
+      // Check if user has access to private community
+      if (community.is_private) {
+        if (!userId) {
+          return null; // Hide private community from anonymous users
+        }
+        const isMember = await this.isMember(community.id, userId);
+        if (!isMember) {
+          return null;
+        }
+      }
+
+      return community;
+    } catch (error) {
+      logger.error('Failed to get community by id:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Internal method to get community by ID without privacy checks
+   */
+  private static async getByIdInternal(id: string): Promise<Community | null> {
+    try {
       const { data: community, error } = await supabase
         .from('communities')
         .select('*')
@@ -176,18 +207,6 @@ export class CommunityService {
       if (error && error.code !== 'PGRST116') {
         logger.error('Failed to get community by id:', error);
         throw new Error('Failed to get community');
-      }
-
-      if (!community) {
-        return null;
-      }
-
-      // Check if user has access to private community
-      if (community.is_private && userId) {
-        const isMember = await this.isMember(community.id, userId);
-        if (!isMember) {
-          return null;
-        }
       }
 
       return community;
@@ -265,8 +284,8 @@ export class CommunityService {
       // Validate input
       JoinCommunitySchema.parse({ community_id: communityId, user_id: userId });
 
-      // Check if community exists
-      const community = await this.getById(communityId);
+      // Check if community exists (bypass privacy for join operations)
+      const community = await this.getByIdInternal(communityId);
       if (!community) {
         throw new Error('Community not found');
       }
@@ -329,7 +348,7 @@ export class CommunityService {
       }
 
       // Don't allow community creator to leave (they need to transfer ownership first)
-      const community = await this.getById(communityId);
+      const community = await this.getByIdInternal(communityId);
       if (community?.creator_id === userId) {
         throw new Error('Community creator cannot leave. Transfer ownership first.');
       }
