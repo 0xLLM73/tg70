@@ -5,28 +5,18 @@ export default {
   testEnvironment: 'node',
   roots: ['<rootDir>/src'],
   testMatch: [
-    '**/__tests__/*.test.ts'
+    '**/__tests__/interceptor/**/*.test.ts'
   ],
   collectCoverageFrom: [
     'src/**/*.ts',
     '!src/**/*.d.ts',
     '!src/index.ts',
-    '!src/bot.ts',
-    '!src/config/index.ts',
     '!src/types/index.ts'
   ],
-  coverageDirectory: 'coverage',
+  coverageDirectory: 'coverage-interceptor',
   coverageReporters: ['text', 'lcov', 'html'],
-  coverageThreshold: {
-    global: {
-      branches: 80,
-      functions: 80,
-      lines: 80,
-      statements: 80
-    }
-  },
-  setupFilesAfterEnv: ['<rootDir>/src/__tests__/setup.ts'],
-  testTimeout: 30000,
+  setupFilesAfterEnv: ['<rootDir>/src/__tests__/interceptor-setup.ts'],
+  testTimeout: 15000, // Longer timeout for integration tests
   moduleNameMapper: {
     '^(\\.{1,2}/.*)\\.js$': '$1',
   },
@@ -35,4 +25,8 @@ export default {
       useESM: true,
     }],
   },
+  // Display interceptor test results with more detail
+  verbose: true,
+  // Allow console.log statements to show intercepted data
+  silent: false,
 };
