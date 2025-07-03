@@ -67,22 +67,22 @@ export function getOutgoingMessages(): InterceptedMessage[] {
 
 /**
  * Outgoing API call interceptor
- * Intercepts calls to bot.telegram.callApi
+ * Intercepts calls to bot.telegram.callApi and mocks the response
  */
 export function outgoingInterceptor(originalCallApi: Function): Function {
   return async function(this: any, method: string, ...params: any[]) {
     const startTime = Date.now();
     
     try {
-      // Call the original API method
-      const response = await originalCallApi.call(this, method, ...params);
+      // Mock the API response instead of making real calls
+      const mockResponse = createMockTelegramResponse(method, params[0]);
       
       // Record the successful call
       const interceptedCall: InterceptedCall = {
         method,
         params,
         timestamp: startTime,
-        response,
+        response: mockResponse,
       };
       interceptedCalls.push(interceptedCall);
       
@@ -96,7 +96,7 @@ export function outgoingInterceptor(originalCallApi: Function): Function {
         });
       }
       
-      return response;
+      return mockResponse;
     } catch (error) {
       // Record the failed call
       const interceptedCall: InterceptedCall = {
@@ -113,8 +113,63 @@ export function outgoingInterceptor(originalCallApi: Function): Function {
 }
 
 /**
+ * Create mock Telegram API responses
+ */
+function createMockTelegramResponse(method: string, payload: any): any {
+  switch (method) {
+    case 'sendMessage':
+      return {
+        message_id: Math.floor(Math.random() * 1000000),
+        from: {
+          id: 12345,
+          is_bot: true,
+          first_name: 'Test Bot',
+          username: 'testbot',
+        },
+        chat: {
+          id: payload?.chat_id || 12345,
+          type: 'private',
+          first_name: 'Test',
+          username: 'testuser',
+        },
+        date: Math.floor(Date.now() / 1000),
+        text: payload?.text || 'Test message',
+      };
+    
+    case 'editMessageText':
+      return {
+        message_id: payload?.message_id || 123,
+        from: {
+          id: 12345,
+          is_bot: true,
+          first_name: 'Test Bot',
+          username: 'testbot',
+        },
+        chat: {
+          id: payload?.chat_id || 12345,
+          type: 'private',
+          first_name: 'Test',
+          username: 'testuser',
+        },
+        date: Math.floor(Date.now() / 1000),
+        text: payload?.text || 'Edited message',
+        edit_date: Math.floor(Date.now() / 1000),
+      };
+    
+    case 'deleteMessage':
+      return true;
+    
+    case 'answerCallbackQuery':
+      return true;
+    
+    default:
+      return { ok: true };
+  }
+}
+
+/**
  * Incoming message interceptor middleware
- * Captures incoming messages before they reach command handlers
+ * Captures incoming messages before they reach command handlers and wraps context methods
  */
 export function incomingInterceptor(): Middleware<BotContext> {
   return async (ctx, next) => {
@@ -129,74 +184,62 @@ export function incomingInterceptor(): Middleware<BotContext> {
         session: ctx.session,
       },
     });
+
+    // Wrap context methods to capture their usage
+    const originalReply = ctx.reply;
+    const originalEditMessageText = ctx.editMessageText;
+    const originalDeleteMessage = ctx.deleteMessage;
+    
+    // Wrap reply method to capture its calls
+    ctx.reply = async function(text: string, extra?: any) {
+      // Record the reply before calling the original
+      interceptedMessages.push({
+        type: 'outgoing',
+        method: 'reply',
+        payload: { text, extra },
+        timestamp: Date.now(),
+        context: {
+          from: ctx.from,
+          chat: ctx.chat,
+        },
+      });
+
+      // Call the original reply method which should trigger sendMessage API call
+      return await originalReply.call(ctx, text, extra);
+    };
+
+    // Wrap editMessageText if it exists
+    if (originalEditMessageText) {
+      ctx.editMessageText = async function(text: string, extra?: any) {
+        interceptedMessages.push({
+          type: 'outgoing',
+          method: 'editMessageText',
+          payload: { text, extra },
+          timestamp: Date.now(),
+        });
+        return await originalEditMessageText.call(ctx, text, extra);
+      };
+    }
+
+    // Wrap deleteMessage if it exists
+    if (originalDeleteMessage) {
+      ctx.deleteMessage = async function(messageId?: number) {
+        interceptedMessages.push({
+          type: 'outgoing',
+          method: 'deleteMessage',
+          payload: { messageId },
+          timestamp: Date.now(),
+        });
+        return await originalDeleteMessage.call(ctx, messageId);
+      };
+    }
     
     // Continue to next middleware
     await next();
   };
 }
 
-/**
- * Enhanced context interceptor
- * Wraps context methods to capture their usage
- */
-export function enhanceContextForInterception(ctx: BotContext): BotContext {
-  const originalReply = ctx.reply.bind(ctx);
-  const originalEditMessageText = ctx.editMessageText?.bind(ctx);
-  const originalDeleteMessage = ctx.deleteMessage?.bind(ctx);
-  
-  // Wrap reply method
-  ctx.reply = async function(text: string, extra?: any) {
-    const result = await originalReply(text, extra);
-    
-    // Record the reply
-    interceptedMessages.push({
-      type: 'outgoing',
-      method: 'reply',
-      payload: { text, extra },
-      timestamp: Date.now(),
-      context: {
-        from: ctx.from,
-        chat: ctx.chat,
-      },
-    });
-    
-    return result;
-  };
-  
-  // Wrap editMessageText if it exists
-  if (originalEditMessageText) {
-    ctx.editMessageText = async function(text: string, extra?: any) {
-      const result = await originalEditMessageText(text, extra);
-      
-      interceptedMessages.push({
-        type: 'outgoing',
-        method: 'editMessageText',
-        payload: { text, extra },
-        timestamp: Date.now(),
-      });
-      
-      return result;
-    };
-  }
-  
-  // Wrap deleteMessage if it exists
-  if (originalDeleteMessage) {
-    ctx.deleteMessage = async function(messageId?: number) {
-      const result = await originalDeleteMessage(messageId);
-      
-      interceptedMessages.push({
-        type: 'outgoing',
-        method: 'deleteMessage',
-        payload: { messageId },
-        timestamp: Date.now(),
-      });
-      
-      return result;
-    };
-  }
-  
-  return ctx;
-}
+
 
 /**
  * Set up interceptors on a Telegraf bot instance
@@ -210,8 +253,24 @@ export function setupInterceptors(bot: Telegraf<BotContext>): void {
   const newCallApi = outgoingInterceptor(originalCallApi);
   bot.telegram.callApi = newCallApi.bind(bot.telegram);
   
-  // Add incoming message interceptor middleware
+  // Add incoming message interceptor middleware at the very beginning
   bot.use(incomingInterceptor());
+}
+
+/**
+ * Create a bot specifically configured for interceptor testing
+ */
+export function createInterceptorBot(): Telegraf<BotContext> {
+  // Import the bot creation function
+  const { createBot } = require('../../bot.js');
+  
+  // Create the bot
+  const bot = createBot();
+  
+  // Set up interceptors
+  setupInterceptors(bot);
+  
+  return bot;
 }
 
 /**
@@ -292,6 +351,23 @@ export const assertions = {
       throw new Error(`Expected message containing "${expectedText}" to be sent`);
     }
   },
+
+  /**
+   * Assert that ctx.reply was called
+   */
+  assertReplyMethodCalled(times?: number): void {
+    const replyMessages = getOutgoingMessages().filter(msg => msg.method === 'reply');
+    
+    if (times !== undefined) {
+      if (replyMessages.length !== times) {
+        throw new Error(`Expected ctx.reply to be called ${times} times, but was called ${replyMessages.length} times`);
+      }
+    } else {
+      if (replyMessages.length === 0) {
+        throw new Error('Expected ctx.reply to be called, but it was not called');
+      }
+    }
+  },
   
   /**
    * Assert that a specific number of messages were sent
@@ -307,7 +383,14 @@ export const assertions = {
    * Get the actual Telegram API payload for inspection
    */
   getActualPayload(method: string): any {
+    // First try to find API call
     const call = getLastCallOfMethod(method);
-    return call?.params[0] || null;
+    if (call?.params[0]) {
+      return call.params[0];
+    }
+    
+    // If no API call found, look for context method call
+    const contextCall = getOutgoingMessages().find(msg => msg.method === method);
+    return contextCall?.payload || null;
   },
 };

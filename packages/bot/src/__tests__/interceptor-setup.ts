@@ -77,6 +77,10 @@ jest.mock('../middleware/session', () => ({
         updated_at: new Date().toISOString(),
       },
     };
+
+    // DO NOT MOCK ctx.reply - let it use the real Telegram API path
+    // This ensures interceptors can catch the API calls
+    
     return next();
   }),
 }));
