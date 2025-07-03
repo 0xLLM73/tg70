@@ -255,7 +255,7 @@ export class CommunityService {
       }
 
       // Apply pagination
-      query = query.range(offset, offset + limit);
+      query = query.range(offset, offset + limit - 1);
 
       const { data: communities, error, count } = await query;
 
@@ -357,8 +357,7 @@ export class CommunityService {
       const { error } = await supabase
         .from('community_members')
         .delete()
-        .eq('community_id', communityId)
-        .eq('user_id', userId);
+        .match({ community_id: communityId, user_id: userId });
 
       if (error) {
         logger.error('Failed to leave community:', error);

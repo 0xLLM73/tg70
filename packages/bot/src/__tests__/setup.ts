@@ -84,43 +84,122 @@ function generateMockUuid(): string {
 class MockQueryBuilder {
   private table: string;
   private selectColumns: string;
-  private filters: { column: string; value: any }[] = [];
+  private filters: { column: string; value: any; operator: string }[] = [];
+  private orFilters: string[] = [];
+  private orderBy: { column: string; ascending: boolean }[] = [];
+  private rangeStart?: number;
+  private rangeEnd?: number;
+  private countOption?: string;
   
   constructor(table: string) {
     this.table = table;
     this.selectColumns = '*';
   }
   
-  select(columns = '*') {
+  select(columns = '*', options?: { count?: string }) {
     this.selectColumns = columns;
+    if (options?.count) {
+      this.countOption = options.count;
+    }
     return this;
   }
   
   eq(column: string, value: any) {
-    this.filters.push({ column, value });
+    this.filters.push({ column, value, operator: 'eq' });
+    return this;
+  }
+  
+  or(conditions: string) {
+    this.orFilters.push(conditions);
+    return this;
+  }
+  
+  ilike(column: string, pattern: string) {
+    this.filters.push({ column, value: pattern, operator: 'ilike' });
+    return this;
+  }
+  
+  order(column: string, options?: { ascending?: boolean }) {
+    this.orderBy.push({ column, ascending: options?.ascending !== false });
+    return this;
+  }
+  
+  range(from: number, to: number) {
+    this.rangeStart = from;
+    this.rangeEnd = to;
     return this;
   }
   
   single() {
-    const items = mockStore[this.table] || [];
-    let filtered = items;
-    
-    // Apply all filters
-    for (const filter of this.filters) {
-      filtered = filtered.filter(item => item[filter.column] === filter.value);
-    }
-    
-    const item = filtered[0] || null;
+    const items = this.executeQuery();
+    const item = items[0] || null;
     return Promise.resolve({ 
       data: item, 
       error: item ? null : { code: 'PGRST116' } 
     });
   }
   
+  // For operations that return arrays
+  then(onResolve: any, onReject?: any) {
+    const items = this.executeQuery();
+    const count = mockStore[this.table]?.length || 0;
+    
+    const result = {
+      data: items,
+      error: null,
+      count: this.countOption ? count : undefined,
+    };
+    
+    return Promise.resolve(result).then(onResolve, onReject);
+  }
+  
+  private executeQuery() {
+    let items = [...(mockStore[this.table] || [])];
+    
+    // Apply regular filters
+    for (const filter of this.filters) {
+      if (filter.operator === 'eq') {
+        items = items.filter(item => item[filter.column] === filter.value);
+      } else if (filter.operator === 'ilike') {
+        const pattern = filter.value.replace(/%/g, '');
+        items = items.filter(item => 
+          item[filter.column]?.toLowerCase?.()?.includes?.(pattern.toLowerCase()) || false
+        );
+      }
+    }
+    
+    // Apply OR filters (simplified - just show all items for now)
+    if (this.orFilters.length > 0) {
+      // For tests, we'll return all items when OR is used
+      items = [...(mockStore[this.table] || [])];
+    }
+    
+    // Apply ordering
+    for (const order of this.orderBy) {
+      items.sort((a, b) => {
+        const aVal = a[order.column];
+        const bVal = b[order.column];
+        let comparison = 0;
+        
+        if (aVal < bVal) comparison = -1;
+        else if (aVal > bVal) comparison = 1;
+        
+        return order.ascending ? comparison : -comparison;
+      });
+    }
+    
+    // Apply range/pagination
+    if (this.rangeStart !== undefined && this.rangeEnd !== undefined) {
+      items = items.slice(this.rangeStart, this.rangeEnd + 1);
+    }
+    
+    return items;
+  }
+  
   // Add support for non-terminal operations that return filtered results
   where(conditions: Record<string, any>) {
     for (const [column, value] of Object.entries(conditions)) {
-      this.filters.push({ column, value });
+      this.filters.push({ column, value, operator: 'eq' });
     }
     return this;
   }
@@ -176,19 +255,22 @@ class MockInsertBuilder {
 // Mock delete builder
 class MockDeleteBuilder {
   private table: string;
+  private filters: { column: string; value: any }[] = [];
   
   constructor(table: string) {
     this.table = table;
   }
   
   eq(column: string, value: any) {
-    const items = mockStore[this.table] || [];
-    const initialLength = items.length;
-    mockStore[this.table] = items.filter(item => item[column] !== value);
-    return Promise.resolve({ 
-      data: null, 
-      error: mockStore[this.table].length !== initialLength ? null : new Error('No rows deleted')
-    });
+    this.filters.push({ column, value });
+    return this;
+  }
+  
+  match(conditions: Record<string, any>) {
+    for (const [column, value] of Object.entries(conditions)) {
+      this.filters.push({ column, value });
+    }
+    return this.execute();
   }
   
   neq(column: string, value: any) {
@@ -199,6 +281,34 @@ class MockDeleteBuilder {
       data: null, 
       error: mockStore[this.table].length !== initialLength ? null : new Error('No rows deleted')
     });
+  }
+  
+  private execute() {
+    const items = mockStore[this.table] || [];
+    const initialLength = items.length;
+    
+    // Apply all filters
+    let filtered = items;
+    for (const filter of this.filters) {
+      filtered = filtered.filter(item => item[filter.column] !== filter.value);
+    }
+    
+    mockStore[this.table] = filtered;
+    const deletedCount = initialLength - filtered.length;
+    
+    return Promise.resolve({ 
+      data: null, 
+      error: deletedCount > 0 ? null : new Error('No rows deleted')
+    });
+  }
+  
+  // Handle chained operations
+  then(onResolve: any, onReject?: any) {
+    if (this.filters.length === 0) {
+      return Promise.resolve({ data: null, error: new Error('No conditions specified') })
+        .then(onResolve, onReject);
+    }
+    return this.execute().then(onResolve, onReject);
   }
 }
 
